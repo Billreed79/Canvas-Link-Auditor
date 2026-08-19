@@ -153,11 +153,18 @@ py -m pip install requests pandas openpyxl beautifulsoup4
 The script requires a Canvas API access token.
 
 Create a personal access token through your Canvas account's settings. The exact location may vary depending on your institution's Canvas configuration.
+Usually it's located in Account → Settings → Approved Integrations → + New Access Token
+
+Give it a description such as:
+
+__External Link Audit__
+
+Then copy the token. Don't put the token into the Python file!
 
 **Never commit your Canvas API token to GitHub.**
 
 The script reads the token from the `CANVAS_API_TOKEN` environment variable.
-
+In Windows PowerShell, run:
 ### Windows PowerShell
 
 ```powershell
