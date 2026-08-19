@@ -17,10 +17,12 @@ Designed for instructors and course developers who want to review external resou
   * Module items
   * Pages
   * Assignments
+  * Announcements
   * Discussions
   * Quizzes
   * External tools
   * Embedded resources
+  * Canvas Files
 * Associates links with their Canvas module when possible
 * Excludes Canvas-internal links
 * Detects duplicate external URLs
@@ -63,6 +65,7 @@ Provides an overview of the audit:
 * Working URLs
 * Problem URLs
 * APA citation confidence statistics
+* Information grouped by Canvas Module
 
 ### All External Links
 
@@ -137,13 +140,13 @@ cd Canvas-Link-Auditor
 Install the required Python packages:
 
 ```bash
-python -m pip install requests pandas openpyxl beautifulsoup4
+python -m pip install requests pandas openpyxl beautifulsoup4 pypdf python-docx python-pptx
 ```
 
 On Windows, you can alternatively use:
 
 ```powershell
-py -m pip install requests pandas openpyxl beautifulsoup4
+py -m pip install requests pandas openpyxl beautifulsoup4 pypdf python-docx python-pptx
 ```
 
 ---
