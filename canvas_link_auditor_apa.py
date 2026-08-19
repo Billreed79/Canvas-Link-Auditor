@@ -8,6 +8,22 @@ from urllib.parse import urlparse, urljoin
 import requests
 import pandas as pd
 from bs4 import BeautifulSoup
+
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
+
+try:
+    from docx import Document
+except ImportError:
+    Document = None
+
+try:
+    from pptx import Presentation
+except ImportError:
+    Presentation = None
+
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -33,12 +49,16 @@ COURSE_ID = "123456"
 # $env:CANVAS_API_TOKEN="your_token_here"
 API_TOKEN = os.environ.get("CANVAS_API_TOKEN")
 
-#Change the output filename if you'd like.
 OUTPUT_FILE = "canvas_external_links.xlsx"
 
-#Options for link checks and APA metadata retrieval. 
 CHECK_LINKS = True
 EXTRACT_APA_METADATA = True
+
+# Scan Canvas Files for embedded links in PDF, Word, and PowerPoint files.
+SCAN_CANVAS_DOCUMENTS = True
+
+# Maximum Canvas File size to download for document scanning.
+MAX_DOCUMENT_SIZE_MB = 50
 
 REQUEST_DELAY = 0.1
 HTTP_TIMEOUT = 15
@@ -484,6 +504,261 @@ def scan_quizzes(module_lookup):
                 quiz_id,
                 source="Quiz description",
             )
+
+
+
+# ============================================================
+# ANNOUNCEMENTS AND CANVAS FILES
+# ============================================================
+
+def scan_announcements():
+    """Scan Canvas Announcements for external links."""
+    print("Scanning Announcements...")
+
+    announcements = canvas_get(
+        f"/courses/{COURSE_ID}/discussion_topics",
+        params={"only_announcements": "true", "per_page": 100},
+    )
+
+    print(f"  Found {len(announcements)} announcements.")
+
+    for announcement in announcements:
+        scan_html(
+            announcement.get("message", ""),
+            "Announcement",
+            announcement.get("title", ""),
+            announcement.get("id", ""),
+            source="Announcement message",
+        )
+
+
+def get_canvas_files():
+    """Retrieve all files available through the course Files area."""
+    return canvas_get(
+        f"/courses/{COURSE_ID}/files",
+        params={"per_page": 100},
+    )
+
+
+def get_file_module_lookup(modules):
+    """Map Canvas File IDs to modules containing those files."""
+    lookup = {}
+
+    for module in modules:
+        for item in module.get("items", []):
+            if item.get("type") == "File" and item.get("content_id") is not None:
+                lookup.setdefault(str(item["content_id"]), []).append({
+                    "id": module.get("id"),
+                    "name": module.get("name", ""),
+                })
+
+    return lookup
+
+
+def download_canvas_file(file_info):
+    """Download a Canvas File into memory."""
+    url = file_info.get("url")
+    if not url:
+        return None
+
+    size = file_info.get("size")
+    if size and size > MAX_DOCUMENT_SIZE_MB * 1024 * 1024:
+        print(
+            f"  Skipping large file: {file_info.get('display_name', '')} "
+            f"({size / 1024 / 1024:.1f} MB)"
+        )
+        return None
+
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=HTTP_TIMEOUT)
+        response.raise_for_status()
+        return response.content
+    except requests.RequestException as e:
+        print(f"  Could not download {file_info.get('display_name', '')}: {e}")
+        return None
+
+
+def extract_urls_from_text(text):
+    """Extract literal HTTP/HTTPS URLs from extracted document text."""
+    if not text:
+        return []
+
+    return re.findall(r"""https?://[^\s<>"'\]\)]+""", text)
+
+
+def scan_pdf_bytes(data, file_info, module):
+    """Scan PDF text plus clickable PDF hyperlink annotations."""
+    if PdfReader is None:
+        print("  pypdf is not installed; skipping PDF.")
+        return
+
+    try:
+        import io
+        reader = PdfReader(io.BytesIO(data))
+
+        for page_number, page in enumerate(reader.pages, start=1):
+            text = page.extract_text() or ""
+
+            for url in extract_urls_from_text(text):
+                add_link(
+                    url, "Canvas File", file_info.get("display_name", ""),
+                    file_info.get("id", ""), module.get("name", ""),
+                    module.get("id", ""), source=f"PDF text, page {page_number}",
+                )
+
+            annotations = page.get("/Annots", [])
+            for annotation_ref in annotations:
+                try:
+                    annotation = annotation_ref.get_object()
+                    action = annotation.get("/A")
+                    uri = action.get("/URI") if action else None
+
+                    if uri and is_http_url(str(uri)):
+                        add_link(
+                            str(uri), "Canvas File",
+                            file_info.get("display_name", ""),
+                            file_info.get("id", ""),
+                            module.get("name", ""), module.get("id", ""),
+                            source=f"PDF hyperlink, page {page_number}",
+                        )
+                except Exception:
+                    continue
+
+    except Exception as e:
+        print(f"  PDF scan failed for {file_info.get('display_name', '')}: {e}")
+
+
+def scan_docx_bytes(data, file_info, module):
+    """Scan DOCX hyperlink relationships and visible URLs."""
+    if Document is None:
+        print("  python-docx is not installed; skipping DOCX.")
+        return
+
+    try:
+        import io
+        document = Document(io.BytesIO(data))
+
+        for rel in document.part.rels.values():
+            if rel.reltype.endswith("/hyperlink"):
+                target = rel.target_ref
+                if target and is_http_url(target):
+                    add_link(
+                        target, "Canvas File",
+                        file_info.get("display_name", ""),
+                        file_info.get("id", ""),
+                        module.get("name", ""), module.get("id", ""),
+                        source="Word hyperlink",
+                    )
+
+        text_parts = [p.text for p in document.paragraphs]
+        for table in document.tables:
+            for row in table.rows:
+                for cell in row.cells:
+                    text_parts.append(cell.text)
+
+        for text in text_parts:
+            for url in extract_urls_from_text(text):
+                add_link(
+                    url, "Canvas File",
+                    file_info.get("display_name", ""),
+                    file_info.get("id", ""),
+                    module.get("name", ""), module.get("id", ""),
+                    source="Word document text",
+                )
+
+    except Exception as e:
+        print(f"  Word scan failed for {file_info.get('display_name', '')}: {e}")
+
+
+def scan_pptx_bytes(data, file_info, module):
+    """Scan PPTX hyperlink relationships and visible URLs."""
+    if Presentation is None:
+        print("  python-pptx is not installed; skipping PPTX.")
+        return
+
+    try:
+        import io
+        presentation = Presentation(io.BytesIO(data))
+
+        for slide_number, slide in enumerate(presentation.slides, start=1):
+            for shape in slide.shapes:
+                if not hasattr(shape, "text_frame"):
+                    continue
+
+                text_parts = []
+
+                for paragraph in shape.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        text_parts.append(run.text)
+
+                        address = run.hyperlink.address
+                        if address and is_http_url(address):
+                            add_link(
+                                address, "Canvas File",
+                                file_info.get("display_name", ""),
+                                file_info.get("id", ""),
+                                module.get("name", ""), module.get("id", ""),
+                                run.text.strip(),
+                                f"PowerPoint hyperlink, slide {slide_number}",
+                            )
+
+                for url in extract_urls_from_text(" ".join(text_parts)):
+                    add_link(
+                        url, "Canvas File",
+                        file_info.get("display_name", ""),
+                        file_info.get("id", ""),
+                        module.get("name", ""), module.get("id", ""),
+                        source=f"PowerPoint text, slide {slide_number}",
+                    )
+
+    except Exception as e:
+        print(f"  PowerPoint scan failed for {file_info.get('display_name', '')}: {e}")
+
+
+def scan_canvas_files(modules):
+    """Scan PDF, DOCX, and PPTX files in Canvas Files."""
+    if not SCAN_CANVAS_DOCUMENTS:
+        return
+
+    print("Scanning Canvas Files...")
+
+    files = get_canvas_files()
+    file_module_lookup = get_file_module_lookup(modules)
+    print(f"  Found {len(files)} Canvas files.")
+
+    supported = {".pdf", ".docx", ".pptx"}
+    scanned = 0
+
+    for file_info in files:
+        filename = file_info.get("display_name", "")
+        extension = os.path.splitext(filename)[1].lower()
+
+        if extension not in supported:
+            continue
+
+        scanned += 1
+        print(f"  Scanning {filename}")
+
+        data = download_canvas_file(file_info)
+        if not data:
+            continue
+
+        modules_for_file = file_module_lookup.get(
+            str(file_info.get("id")),
+            [{"id": "", "name": ""}],
+        )
+
+        for module in modules_for_file:
+            if extension == ".pdf":
+                scan_pdf_bytes(data, file_info, module)
+            elif extension == ".docx":
+                scan_docx_bytes(data, file_info, module)
+            elif extension == ".pptx":
+                scan_pptx_bytes(data, file_info, module)
+
+        time.sleep(REQUEST_DELAY)
+
+    print(f"  Scanned {scanned} PDF/DOCX/PPTX files.")
 
 
 # ============================================================
@@ -951,11 +1226,14 @@ def create_report():
     print()
 
     module_lookup = build_module_lookup()
+    modules = get_modules()
 
     scan_pages(module_lookup)
     scan_assignments(module_lookup)
     scan_discussions(module_lookup)
     scan_quizzes(module_lookup)
+    scan_announcements()
+    scan_canvas_files(modules)
 
     if not records:
         print("\nNo external links were found.")
