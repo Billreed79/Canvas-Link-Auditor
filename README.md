@@ -130,8 +130,8 @@ beautifulsoup4
 Clone the repository:
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/canvas-external-link-auditor.git
-cd canvas-external-link-auditor
+git clone https://github.com/Billreed79/Canvas-Link-Auditor.git
+cd Canvas-Link-Auditor
 ```
 
 Install the required Python packages:
