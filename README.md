@@ -4,7 +4,7 @@ A Python utility for auditing external links in a Canvas LMS course and generati
 
 Designed for instructors and course developers who want to review external resources before a new semester, identify broken or redirected links, and maintain a bibliography of resources used throughout a Canvas course.
 
-> **Disclaimer:** This project is an independent community-developed tool and is not affiliated with, sponsored by, or endorsed by Instructure or Canvas LMS.
+> **Disclaimer:** This project is an independent community-developed tool and is not affiliated with, sponsored by, or endorsed by my employer, Instructure or Canvas LMS.
 
 ---
 
